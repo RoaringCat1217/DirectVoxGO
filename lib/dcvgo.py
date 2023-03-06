@@ -14,6 +14,7 @@ from .dvgo import Raw2Alpha, Alphas2Weights
 from .dmpigo import create_full_step_id
 
 from torch.utils.cpp_extension import load
+from .camera import *
 parent_dir = os.path.dirname(os.path.abspath(__file__))
 ub360_utils_cuda = load(
         name='ub360_utils_cuda',
@@ -25,7 +26,7 @@ ub360_utils_cuda = load(
 
 '''Model'''
 class DirectContractedVoxGO(nn.Module):
-    def __init__(self, xyz_min, xyz_max,
+    def __init__(self, xyz_min, xyz_max, n_poses,
                  num_voxels=0, num_voxels_base=0,
                  alpha_init=None,
                  mask_cache_world_size=None,
@@ -41,6 +42,9 @@ class DirectContractedVoxGO(nn.Module):
         # xyz_min/max are the boundary that separates fg and bg scene
         xyz_min = torch.Tensor(xyz_min)
         xyz_max = torch.Tensor(xyz_max)
+        self.n_poses = n_poses
+        self.se3_refine = torch.nn.Embedding(n_poses, 6)
+        torch.nn.init.zeros_(self.se3_refine.weight)
         assert len(((xyz_max - xyz_min) * 100000).long().unique()), 'scene bbox must be a cube in DirectContractedVoxGO'
         self.register_buffer('scene_center', (xyz_min + xyz_max) * 0.5)
         self.register_buffer('scene_radius', (xyz_max - xyz_min) * 0.5)
@@ -149,6 +153,7 @@ class DirectContractedVoxGO(nn.Module):
             'k0_type': self.k0_type,
             'density_config': self.density_config,
             'k0_config': self.k0_config,
+            'n_poses': self.n_poses,
             **self.rgbnet_kwargs,
         }
 
@@ -272,6 +277,12 @@ class DirectContractedVoxGO(nn.Module):
             ray_pts / norm * ((1+self.bg_len) - self.bg_len/norm)
         )
         return ray_pts, inner_mask.squeeze(-1), t
+
+    def refine_poses(self, poses, idx):
+        weight = self.se3_refine(idx)
+        pose_refine = Lie.se3_to_SE3(weight)
+        poses = Pose.compose([pose_refine, poses])
+        return poses
 
     def forward(self, rays_o, rays_d, viewdirs, global_step=None, is_train=False, **render_kwargs):
         '''Volume rendering

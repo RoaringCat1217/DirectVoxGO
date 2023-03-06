@@ -14,6 +14,7 @@ from lib import utils, dvgo, dcvgo, dmpigo
 from lib.load_data import load_data
 
 from torch_efficient_distloss import flatten_eff_distloss
+from tensorboardX import SummaryWriter
 
 
 def config_parser():
@@ -255,7 +256,7 @@ def compute_bbox_by_coarse_geo(model_class, model_path, thres):
     print('compute_bbox_by_coarse_geo: finish (eps time:', eps_time, 'secs)')
     return xyz_min, xyz_max
 
-def create_new_model(cfg, cfg_model, cfg_train, xyz_min, xyz_max, stage, coarse_ckpt_path):
+def create_new_model(cfg, cfg_model, cfg_train, xyz_min, xyz_max, n_poses, stage, coarse_ckpt_path):
     model_kwargs = copy.deepcopy(cfg_model)
     num_voxels = model_kwargs.pop('num_voxels')
     if len(cfg_train.pg_scale):
@@ -272,6 +273,7 @@ def create_new_model(cfg, cfg_model, cfg_train, xyz_min, xyz_max, stage, coarse_
         model = dcvgo.DirectContractedVoxGO(
             xyz_min=xyz_min, xyz_max=xyz_max,
             num_voxels=num_voxels,
+            n_poses=n_poses,
             **model_kwargs)
     else:
         print(f'scene_rep_reconstruction ({stage}): \033[96muse dense voxel grid\033[0m')
@@ -310,7 +312,9 @@ def scene_rep_reconstruction(args, cfg, cfg_model, cfg_train, xyz_min, xyz_max, 
             'HW', 'Ks', 'near', 'far', 'i_train', 'i_val', 'i_test', 'poses', 'render_poses', 'images'
         ]
     ]
-
+    timestamp = time.strftime("%Y-%m-%d|%H:%M:%S", time.localtime())
+    tb_path = os.path.join(cfg.basedir, cfg.expname, 'tb', timestamp)
+    writer = SummaryWriter(tb_path)
     # find whether there is existing checkpoint path
     last_ckpt_path = os.path.join(cfg.basedir, cfg.expname, f'{stage}_last.tar')
     if args.no_reload:
@@ -325,7 +329,7 @@ def scene_rep_reconstruction(args, cfg, cfg_model, cfg_train, xyz_min, xyz_max, 
     # init model and optimizer
     if reload_ckpt_path is None:
         print(f'scene_rep_reconstruction ({stage}): train from scratch')
-        model, optimizer = create_new_model(cfg, cfg_model, cfg_train, xyz_min, xyz_max, stage, coarse_ckpt_path)
+        model, optimizer = create_new_model(cfg, cfg_model, cfg_train, xyz_min, xyz_max, len(poses), stage, coarse_ckpt_path)
         start = 0
         if cfg_model.maskout_near_cam_vox:
             model.maskout_near_cam_vox(poses[i_train,:3,3], near)
@@ -347,51 +351,28 @@ def scene_rep_reconstruction(args, cfg, cfg_model, cfg_train, xyz_min, xyz_max, 
 
     # init batch rays sampler
     def gather_training_rays():
-        if data_dict['irregular_shape']:
-            rgb_tr_ori = [images[i].to('cpu' if cfg.data.load2gpu_on_the_fly else device) for i in i_train]
-        else:
-            rgb_tr_ori = images[i_train].to('cpu' if cfg.data.load2gpu_on_the_fly else device)
+        rgb_tr_ori = images.to('cpu' if cfg.data.load2gpu_on_the_fly else device)
+        B, H, W, _ = rgb_tr_ori.shape
+        rgb_tr = rgb_tr_ori.flatten(0, 2)
+        i, j = torch.meshgrid(
+            torch.linspace(0, W - 1, W, device=rgb_tr_ori.device),
+            torch.linspace(0, H - 1, H, device=rgb_tr_ori.device))
+        i = i.t().float()
+        j = j.t().float()
+        i, j = i + 0.5, j + 0.5
+        coord_tr = torch.stack([i, j], dim=-1)
+        coord_tr = coord_tr.unsqueeze(0).expand(B, H, W, 2)
+        coord_tr = coord_tr.flatten(0, 2)
+        idx_tr = torch.arange(B).view(B, 1, 1).expand(B, H, W)
+        idx_tr = idx_tr.flatten()
+        poses_tr = poses
+        Ks_tr = torch.tensor(Ks.astype(np.float32), device=rgb_tr_ori.device)
 
-        if cfg_train.ray_sampler == 'in_maskcache':
-            rgb_tr, rays_o_tr, rays_d_tr, viewdirs_tr, imsz = dvgo.get_training_rays_in_maskcache_sampling(
-                    rgb_tr_ori=rgb_tr_ori,
-                    train_poses=poses[i_train],
-                    HW=HW[i_train], Ks=Ks[i_train],
-                    ndc=cfg.data.ndc, inverse_y=cfg.data.inverse_y,
-                    flip_x=cfg.data.flip_x, flip_y=cfg.data.flip_y,
-                    model=model, render_kwargs=render_kwargs)
-        elif cfg_train.ray_sampler == 'flatten':
-            rgb_tr, rays_o_tr, rays_d_tr, viewdirs_tr, imsz = dvgo.get_training_rays_flatten(
-                rgb_tr_ori=rgb_tr_ori,
-                train_poses=poses[i_train],
-                HW=HW[i_train], Ks=Ks[i_train], ndc=cfg.data.ndc, inverse_y=cfg.data.inverse_y,
-                flip_x=cfg.data.flip_x, flip_y=cfg.data.flip_y)
-        else:
-            rgb_tr, rays_o_tr, rays_d_tr, viewdirs_tr, imsz = dvgo.get_training_rays(
-                rgb_tr=rgb_tr_ori,
-                train_poses=poses[i_train],
-                HW=HW[i_train], Ks=Ks[i_train], ndc=cfg.data.ndc, inverse_y=cfg.data.inverse_y,
-                flip_x=cfg.data.flip_x, flip_y=cfg.data.flip_y)
         index_generator = dvgo.batch_indices_generator(len(rgb_tr), cfg_train.N_rand)
         batch_index_sampler = lambda: next(index_generator)
-        return rgb_tr, rays_o_tr, rays_d_tr, viewdirs_tr, imsz, batch_index_sampler
+        return rgb_tr, coord_tr, idx_tr, poses_tr, Ks_tr, batch_index_sampler
 
-    rgb_tr, rays_o_tr, rays_d_tr, viewdirs_tr, imsz, batch_index_sampler = gather_training_rays()
-
-    # view-count-based learning rate
-    if cfg_train.pervoxel_lr:
-        def per_voxel_init():
-            cnt = model.voxel_count_views(
-                    rays_o_tr=rays_o_tr, rays_d_tr=rays_d_tr, imsz=imsz, near=near, far=far,
-                    stepsize=cfg_model.stepsize, downrate=cfg_train.pervoxel_lr_downrate,
-                    irregular_shape=data_dict['irregular_shape'])
-            optimizer.set_pervoxel_lr(cnt)
-            model.mask_cache.mask[cnt.squeeze() <= 2] = False
-        per_voxel_init()
-
-    if cfg_train.maskout_lt_nviews > 0:
-        model.update_occupancy_cache_lt_nviews(
-                rays_o_tr, rays_d_tr, imsz, render_kwargs, cfg_train.maskout_lt_nviews)
+    rgb_tr, coord_tr, idx_tr, poses_tr, Ks_tr, batch_index_sampler = gather_training_rays()
 
     # GOGO
     torch.cuda.empty_cache()
@@ -419,28 +400,27 @@ def scene_rep_reconstruction(args, cfg, cfg_model, cfg_train, xyz_min, xyz_max, 
             torch.cuda.empty_cache()
 
         # random sample rays
-        if cfg_train.ray_sampler in ['flatten', 'in_maskcache']:
-            sel_i = batch_index_sampler()
-            target = rgb_tr[sel_i]
-            rays_o = rays_o_tr[sel_i]
-            rays_d = rays_d_tr[sel_i]
-            viewdirs = viewdirs_tr[sel_i]
-        elif cfg_train.ray_sampler == 'random':
-            sel_b = torch.randint(rgb_tr.shape[0], [cfg_train.N_rand])
-            sel_r = torch.randint(rgb_tr.shape[1], [cfg_train.N_rand])
-            sel_c = torch.randint(rgb_tr.shape[2], [cfg_train.N_rand])
-            target = rgb_tr[sel_b, sel_r, sel_c]
-            rays_o = rays_o_tr[sel_b, sel_r, sel_c]
-            rays_d = rays_d_tr[sel_b, sel_r, sel_c]
-            viewdirs = viewdirs_tr[sel_b, sel_r, sel_c]
-        else:
-            raise NotImplementedError
+        sel_i = batch_index_sampler()
+        target = rgb_tr[sel_i]
+        coord = coord_tr[sel_i]
+        idx = idx_tr[sel_i]
+        poses = poses_tr[idx]
+        Ks = Ks_tr[idx]
 
         if cfg.data.load2gpu_on_the_fly:
             target = target.to(device)
-            rays_o = rays_o.to(device)
-            rays_d = rays_d.to(device)
-            viewdirs = viewdirs.to(device)
+            coord = coord.to(device)
+            idx = idx.to(device)
+            poses = poses.to(device)
+            Ks = Ks.to(device)
+
+        poses = model.refine_poses(poses, idx)
+        i, j = torch.split(coord, 1, dim=-1)
+        i, j = i.squeeze(), j.squeeze()
+        dirs = torch.stack([(i - Ks[:, 0, 2]) / Ks[:, 0, 0], -(j - Ks[:, 1, 2]) / Ks[:, 1, 1], -torch.ones_like(i)], -1)
+        rays_d = torch.sum(dirs[..., None, :] * poses[:, :3, :3], dim=-1)
+        rays_o = poses[:, :, -1]
+        viewdirs = rays_d / rays_d.norm(dim=-1, keepdim=True)
 
         # volume rendering
         render_result = model(
@@ -495,6 +475,8 @@ def scene_rep_reconstruction(args, cfg, cfg_model, cfg_train, xyz_min, xyz_max, 
             param_group['lr'] = param_group['lr'] * decay_factor
 
         # check log & save
+        writer.add_scalar('loss', loss, global_step=global_step)
+        writer.add_scalar('psnr', psnr, global_step=global_step)
         if global_step%args.i_print==0:
             eps_time = time.time() - time0
             eps_time_str = f'{eps_time//3600:02.0f}:{eps_time//60%60:02.0f}:{eps_time%60:02.0f}'

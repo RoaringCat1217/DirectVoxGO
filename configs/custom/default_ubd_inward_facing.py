@@ -1,7 +1,6 @@
 _base_ = '../default.py'
 
 basedir = './logs/custom'
-
 data = dict(
     dataset_type='llff',
     spherify=True,
@@ -19,6 +18,7 @@ fine_train = dict(
     N_iters=40000,
     N_rand=4096,
     lrate_decay=80,
+    lrate_se3_refine=2e-4,
     ray_sampler='flatten',
     weight_nearclip=0.0,
     weight_distortion=0.01,

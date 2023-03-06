@@ -1,0 +1,8 @@
+**/.ipynb_checkpoints
+**/__pycache__
+*.npy
+*.npz
+*.dae
+data
+logs
+*.obj
