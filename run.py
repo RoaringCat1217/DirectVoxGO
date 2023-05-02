@@ -1,4 +1,5 @@
 import os, sys, copy, glob, json, time, random, argparse
+os.environ['PATH'] += ':/home/linyf/miniconda3/bin/'
 from shutil import copyfile
 from tqdm import tqdm, trange
 
@@ -364,7 +365,7 @@ def scene_rep_reconstruction(args, cfg, cfg_model, cfg_train, xyz_min, xyz_max, 
         coord_tr = coord_tr.unsqueeze(0).expand(B, H, W, 2)
         coord_tr = coord_tr.flatten(0, 2)
         idx_tr = torch.arange(B).view(B, 1, 1).expand(B, H, W)
-        idx_tr = idx_tr.flatten()
+        idx_tr = idx_tr.flatten().to(rgb_tr_ori.device)
         poses_tr = poses
         Ks_tr = torch.tensor(Ks.astype(np.float32), device=rgb_tr_ori.device)
 
@@ -559,8 +560,7 @@ def train(args, cfg, data_dict):
 
 
 if __name__=='__main__':
-
-    os.chdir("/home2/linyf/GradDesign/DirectVoxGO")
+    os.chdir("/data1/linyf/GradDesign/DirectVoxGO")
     # load setup
     parser = config_parser()
     args = parser.parse_args()
@@ -657,6 +657,13 @@ if __name__=='__main__':
                 savedir=testsavedir, dump_images=args.dump_images,
                 eval_ssim=args.eval_ssim, eval_lpips_alex=args.eval_lpips_alex, eval_lpips_vgg=args.eval_lpips_vgg,
                 **render_viewpoints_kwargs)
+        from matplotlib import pyplot as plt
+        os.makedirs(os.path.join(testsavedir, 'rgb'), exist_ok=True)
+        for i, img in enumerate(rgbs):
+            plt.imsave(os.path.join(testsavedir, 'rgb', str(i).zfill(3) + '.jpg'), img)
+        os.makedirs(os.path.join(testsavedir, 'depth'), exist_ok=True)
+        for i, img in enumerate(depths.squeeze()):
+            plt.imsave(os.path.join(testsavedir, 'depth', str(i).zfill(3) + '.jpg'), img)
         imageio.mimwrite(os.path.join(testsavedir, 'video.rgb.mp4'), utils.to8b(rgbs), fps=30, quality=8)
         imageio.mimwrite(os.path.join(testsavedir, 'video.depth.mp4'), utils.to8b(1 - depths / np.max(depths)), fps=30, quality=8)
 
@@ -666,10 +673,10 @@ if __name__=='__main__':
         os.makedirs(testsavedir, exist_ok=True)
         print('All results are dumped into', testsavedir)
         rgbs, depths, bgmaps = render_viewpoints(
-                render_poses=data_dict['poses'][data_dict['i_test']],
-                HW=data_dict['HW'][data_dict['i_test']],
-                Ks=data_dict['Ks'][data_dict['i_test']],
-                gt_imgs=[data_dict['images'][i].cpu().numpy() for i in data_dict['i_test']],
+                render_poses=data_dict['poses'][data_dict['i_train']],
+                HW=data_dict['HW'][data_dict['i_train']],
+                Ks=data_dict['Ks'][data_dict['i_train']],
+                gt_imgs=[data_dict['images'][i].cpu().numpy() for i in data_dict['i_train']],
                 savedir=testsavedir, dump_images=args.dump_images,
                 eval_ssim=args.eval_ssim, eval_lpips_alex=args.eval_lpips_alex, eval_lpips_vgg=args.eval_lpips_vgg,
                 **render_viewpoints_kwargs)

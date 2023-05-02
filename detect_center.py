@@ -1,5 +1,6 @@
 import argparse
 import os
+os.environ['PATH'] += ':/home/linyf/miniconda3/bin/'
 import numpy as np
 import torch
 import mmcv

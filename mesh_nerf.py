@@ -1,5 +1,6 @@
 import argparse
 import os
+os.environ['PATH'] += ':/home/linyf/miniconda3/bin/'
 import numpy as np
 import torch
 import mmcv
@@ -70,7 +71,7 @@ def extract_iso_level(density, args):
 
     # Adaptive iso level
     iso_value = min(max(args.iso_level, min_a + std_a), max_a - std_a)
-    iso_value = 0.01
+    iso_value = 0.05
     print(f"Min density {min_a}, Max density: {max_a}, Mean density {density.mean()}")
     print(f"Querying based on iso level: {iso_value}")
 
