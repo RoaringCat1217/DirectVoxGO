@@ -2,6 +2,7 @@ import os, sys, copy, glob, json, time, random, argparse
 os.environ['PATH'] += ':/home/linyf/miniconda3/bin/'
 from shutil import copyfile
 from tqdm import tqdm, trange
+from pytorch3d.renderer import FoVPerspectiveCameras
 
 import mmcv
 import imageio

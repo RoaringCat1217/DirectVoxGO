@@ -15,14 +15,6 @@ def config_parser():
     parser.add_argument('--config', required=True,
                         help='config file path')
     parser.add_argument(
-        "--save-dir", type=str, default=".",
-        help="Save mesh to this directory, if specified.",
-    )
-    parser.add_argument(
-        "--mesh-name", type=str, default="mesh.obj",
-        help="Mesh name to be generated.",
-    )
-    parser.add_argument(
         "--iso-level", type=float, default=32,
         help="Iso-level value for triangulation",
     )
@@ -66,13 +58,8 @@ def extract_density(model, args, device, nums, render_kwargs):
 
 
 def extract_iso_level(density, args):
-    # Density boundaries
-    min_a, max_a, std_a = density.min(), density.max(), density.std()
-
     # Adaptive iso level
-    iso_value = min(max(args.iso_level, min_a + std_a), max_a - std_a)
-    iso_value = 0.05
-    print(f"Min density {min_a}, Max density: {max_a}, Mean density {density.mean()}")
+    iso_value = density.mean()
     print(f"Querying based on iso level: {iso_value}")
 
     return iso_value
@@ -102,13 +89,13 @@ def extract_geometry(model, device, args, render_kwargs):
     return vertices, triangles, normals, density
 
 
-def export_marching_cubes(model, args, render_kwargs, device):
+def export_marching_cubes(model, args, cfg, render_kwargs, device):
     print("Generating mesh geometry...")
     # Extract model geometry
     vertices, triangles, normals, density = extract_geometry(model, device, args, render_kwargs)
 
     # Target mesh path
-    mesh_path = os.path.join(args.save_dir, args.mesh_name)
+    mesh_path = os.path.join(cfg.basedir, cfg.expname, 'mesh.obj')
 
     # Export model
     rgb = []
@@ -155,4 +142,4 @@ if __name__ == "__main__":
 
     with torch.no_grad():
         # Perform marching cubes and export the mesh
-        export_marching_cubes(model, args, render_kwargs, device)
+        export_marching_cubes(model, args, cfg, render_kwargs, device)
