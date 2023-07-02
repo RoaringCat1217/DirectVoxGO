@@ -236,3 +236,16 @@ You will need them for scaling to a higher grid resolution. But we believe our s
 
 ## Acknowledgement
 The code base is origined from an awesome [nerf-pytorch](https://github.com/yenchenlin/nerf-pytorch) implementation, but it becomes very different from the code base now.
+
+
+## 新增脚本说明
+
+nerf2mesh.py: 从NeRF提取Mesh --config ./configs/custom/controller.py --limit 0.9 --center -0.038 0.761 0.599  
+detect_center.py: 启发式地根据NeRF的结果确定中心, 用于提取Mesh  ./detect_center.py --config ./configs/custom/controller.py  
+segmentation_sam.py: 只使用SAM的图像分割 ./segmentation_sam.py --source ./data/custom/cup/dense/images  
+segmentation.py: 只使用CLIPSeg的分割 ./segmentation.py --prompt game controller --source ./data/custom/controller/dense/images  
+segmentation_joint.py: 先使用CLIPSeg再使用SAM的分割 ./segmentation_joint.py --prompt little bottle --source ./data/custom/bottle/dense/images  
+clean_mesh.py: 并查集清洗Mesh clean_mesh.py --config ./configs/custom/controller.py  
+refine.py: 基于渲染的Mesh优化 refine.py --config ./configs/custom/controller.py  
+
+ 
